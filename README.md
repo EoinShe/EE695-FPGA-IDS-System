@@ -10,7 +10,7 @@ The project implements a hardware-accelerated IDS capable of detecting network a
 # Layout
 
 - GUI: Python based interface for building attack scenarios and generating packet data.
-  - main.py: main
+  - main.py: main python code for the GUI, using PySide6
   - packet_builder.py: generates packet datasets and header files.
   - topology.py: defines network topology and node locations.
   - Images/: images used for visualising nodes.
