@@ -24,7 +24,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QPlainTextEdit,
+    
 )
+
+MAX_SAFE_PACKETS = 64
+print("USING UPDATED main.py - MAX_SAFE_PACKETS =", MAX_SAFE_PACKETS)
 
 from topology import NODES, Node
 from packet_builder import ScenarioItem, generate_header_text
@@ -340,7 +344,7 @@ class MainWindow(QMainWindow):
             self.attack_list.addItem(item)
 
         self.packet_spin = QSpinBox()
-        self.packet_spin.setRange(1, 10000)
+        self.packet_spin.setRange(1, 64)
         self.packet_spin.setValue(10)
 
         form.addRow("Attack Type(s):", self.attack_list)
@@ -448,6 +452,16 @@ class MainWindow(QMainWindow):
             return
 
         count = self.packet_spin.value()
+
+        if count > MAX_SAFE_PACKETS:
+            QMessageBox.warning(
+                self,
+                "Packet Limit Exceeded",
+                f"Due to BRAM/resource limit, more than {MAX_SAFE_PACKETS} packets "
+                f"per scenario is not currently supported.\n\n"
+                f"Please choose {MAX_SAFE_PACKETS} packets or fewer."
+            )
+            return
 
         for attack in selected_attacks:
             scenario_item = ScenarioItem(
