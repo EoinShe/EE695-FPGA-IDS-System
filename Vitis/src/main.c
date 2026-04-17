@@ -5,6 +5,13 @@
 #include <stdint.h>
 
 #include "ids_test_packets.h"
+#include "ids_ddos_packets.h"
+#include "ids_syn_packets.h"
+#include "ids_test_suite.h"
+#include "ids_normal_packets.h"
+#include "syn_packet_real_world.h"
+
+
 
 #define GPIO_PKT_BASE XPAR_AXI_GPIO_PKT_BASEADDR
 #define GPIO_CTRL_BASE XPAR_AXI_GPIO_TRIG_BASEADDR
@@ -18,22 +25,23 @@
 #define UART_BASE XPAR_AXI_UARTLITE_0_BASEADDR
 
 #define CTRL_TVALID (1u << 0)
-#define CTRL_TLAST (1u << 1)
+#define CTRL_TLAST  (1u << 1)
 
-#define MASK_VOL_ALERT (1u << 31)
-#define MASK_SYN_ALERT (1u << 30)
+#define MASK_VOL_ALERT  (1u << 31)
+#define MASK_SYN_ALERT  (1u << 30)
 #define MASK_ICMP_ALERT (1u << 29)
-#define MASK_UDP_ALERT (1u << 28)
+#define MASK_UDP_ALERT  (1u << 28)
 #define MASK_XMAS_ALERT (1u << 27)
 #define MASK_NULL_ALERT (1u << 26)
 
-#define PKTINFO_SYN (1u << 26)
-#define PKTINFO_UDP (1u << 28)
+#define PKTINFO_SYN  (1u << 26)
+#define PKTINFO_UDP  (1u << 28)
 #define PKTINFO_ICMP (1u << 27)
 #define PKTINFO_XMAS (1u << 25)
 #define PKTINFO_NULL (1u << 24)
 
-#define MAX_WINDOWS 64
+#define MAX_WINDOWS 16
+#define MAX_DYNAMIC_TARGETS 3
 
 typedef struct {
   uint32_t status;
@@ -51,12 +59,16 @@ typedef struct {
   uint32_t nulls;
 } target_stats_t;
 
-
 static target_stats_t targets[] = {
-    {0xC0A80A03, "VMware-VM1"}, {0xC0A80A04, "VMware-VM2"},
-    {0xC0A80A05, "Server1"},    {0xC0A80A06, "Server2"},
+    {0xC0A80A03, "VMware-VM1"},
+    {0xC0A80A04, "VMware-VM2"},
+    {0xC0A80A05, "Server1"},
+    {0xC0A80A06, "Server2"},
     {0xC0A80A07, "VMware-VM3"},
 };
+
+static target_stats_t dynamic_targets[MAX_DYNAMIC_TARGETS];
+static int dynamic_count = 0;
 
 #define TARGET_COUNT (sizeof(targets) / sizeof(targets[0]))
 
@@ -123,7 +135,41 @@ static void update_targets(uint32_t dst, uint32_t pktinfo) {
         targets[i].xmas++;
       if (pktinfo & PKTINFO_NULL)
         targets[i].nulls++;
+
+      return;
     }
+  }
+
+  for (int i = 0; i < dynamic_count; i++) {
+    if (dynamic_targets[i].ip == dst) {
+      dynamic_targets[i].total++;
+
+      if (pktinfo & PKTINFO_SYN)
+        dynamic_targets[i].syn++;
+      if (pktinfo & PKTINFO_UDP)
+        dynamic_targets[i].udp++;
+      if (pktinfo & PKTINFO_ICMP)
+        dynamic_targets[i].icmp++;
+      if (pktinfo & PKTINFO_XMAS)
+        dynamic_targets[i].xmas++;
+      if (pktinfo & PKTINFO_NULL)
+        dynamic_targets[i].nulls++;
+
+      return;
+    }
+  }
+
+  if (dynamic_count < MAX_DYNAMIC_TARGETS) {
+    dynamic_targets[dynamic_count].ip = dst;
+    dynamic_targets[dynamic_count].name = 0;
+    dynamic_targets[dynamic_count].total = 1;
+    dynamic_targets[dynamic_count].syn = (pktinfo & PKTINFO_SYN) ? 1 : 0;
+    dynamic_targets[dynamic_count].udp = (pktinfo & PKTINFO_UDP) ? 1 : 0;
+    dynamic_targets[dynamic_count].icmp = (pktinfo & PKTINFO_ICMP) ? 1 : 0;
+    dynamic_targets[dynamic_count].xmas = (pktinfo & PKTINFO_XMAS) ? 1 : 0;
+    dynamic_targets[dynamic_count].nulls = (pktinfo & PKTINFO_NULL) ? 1 : 0;
+
+    dynamic_count++;
   }
 }
 
@@ -205,6 +251,47 @@ static void print_attacks_detected(void) {
 
     uart_puts("\r\n");
   }
+
+  for (int i = 0; i < dynamic_count; i++) {
+    if (dynamic_targets[i].total == 0)
+      continue;
+
+    uart_puts("Target: ");
+    uart_put_ip(dynamic_targets[i].ip);
+    uart_puts("\r\n");
+
+    if (dynamic_targets[i].syn) {
+      uart_puts("  [!] SYN Attack (");
+      uart_put_dec(dynamic_targets[i].syn);
+      uart_puts(" SYN packets)\r\n");
+    }
+
+    if (dynamic_targets[i].udp) {
+      uart_puts("  [!] UDP Flood (");
+      uart_put_dec(dynamic_targets[i].udp);
+      uart_puts(" UDP packets)\r\n");
+    }
+
+    if (dynamic_targets[i].icmp) {
+      uart_puts("  [!] ICMP Flood (");
+      uart_put_dec(dynamic_targets[i].icmp);
+      uart_puts(" ICMP packets)\r\n");
+    }
+
+    if (dynamic_targets[i].xmas)
+      uart_puts("  [!] XMAS Scan\r\n");
+
+    if (dynamic_targets[i].nulls)
+      uart_puts("  [!] NULL Scan\r\n");
+
+    if (dynamic_targets[i].total > 2) {
+      uart_puts("  [!] Volumetric Attack (");
+      uart_put_dec(dynamic_targets[i].total);
+      uart_puts(" total packets)\r\n");
+    }
+
+    uart_puts("\r\n");
+  }
 }
 
 int main(void) {
@@ -217,19 +304,17 @@ int main(void) {
   uint16_t flood_threshold = 1;
 
   uint32_t threshold_val = ((uint32_t)flood_threshold << 16) | vol_threshold;
-
   Xil_Out32(GPIO_THR_BASE, threshold_val);
 
-  for (int i = 0; i < ids_test_packets_count; i++) {
+  for (uint32_t i = 0; i < ids_test_packets_count; i++) {
     send_packet(&ids_test_packets[i]);
-    usleep(20000);
+    usleep(20000); //changes packets per window
 
     uint32_t cur = Xil_In32(GPIO_WINID_BASE);
 
     while (last_win < cur && win_count < MAX_WINDOWS) {
       uint32_t stat = Xil_In32(GPIO_STAT_BASE);
       uint32_t ws = Xil_In32(GPIO_WINSTATS_BASE);
-
       uint32_t packets = (ws >> 16) & 0xFFFF;
 
       if (packets) {
@@ -248,20 +333,22 @@ int main(void) {
 
   usleep(700000);
 
-  uint32_t cur = Xil_In32(GPIO_WINID_BASE);
+  {
+    uint32_t cur = Xil_In32(GPIO_WINID_BASE);
 
-  while (last_win < cur && win_count < MAX_WINDOWS) {
-    uint32_t stat = Xil_In32(GPIO_STAT_BASE);
-    uint32_t ws = Xil_In32(GPIO_WINSTATS_BASE);
-    uint32_t packets = (ws >> 16) & 0xFFFF;
+    while (last_win < cur && win_count < MAX_WINDOWS) {
+      uint32_t stat = Xil_In32(GPIO_STAT_BASE);
+      uint32_t ws = Xil_In32(GPIO_WINSTATS_BASE);
+      uint32_t packets = (ws >> 16) & 0xFFFF;
 
-    if (packets) {
-      windows[win_count].status = stat;
-      windows[win_count].packets = packets;
-      win_count++;
+      if (packets) {
+        windows[win_count].status = stat;
+        windows[win_count].packets = packets;
+        win_count++;
+      }
+
+      last_win++;
     }
-
-    last_win++;
   }
 
   uart_puts("\r\n=====================================\r\n");
@@ -269,7 +356,7 @@ int main(void) {
   uart_puts("=====================================\r\n");
 
   uart_puts("Window Size: ");
-  uart_put_dec(500);
+  uart_put_dec(250);
   uart_puts(" ms\r\n");
 
   uart_puts("Volumetric Threshold: ");
@@ -295,4 +382,6 @@ int main(void) {
 
   while (1) {
   }
+
+  return 0;
 }
